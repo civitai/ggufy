@@ -1,6 +1,10 @@
 .git
 .gitmodules
 .gitignore
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
 Dockerfile
 docker-compose.yml
 input

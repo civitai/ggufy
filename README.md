@@ -1,6 +1,11 @@
 # ggufy
 A lightweight and efficient tool to convert tensor formats.
 
+> This fork also includes a CPU-only FastAPI service for controller and
+> orchestration integration. See [the API guide](docs/API.md) for exact tensor
+> rules, Hugging Face range-based schema extraction, Docker usage, and the
+> `/v1/conversions` endpoint.
+
 ggufy:
 - is a single-file executable written in zig, for linux, windows, and macos (arm64 and x86_64)
 - comes in CLI and GUI flavors
@@ -92,30 +97,23 @@ zig build
 
 ## Docker
 
-ggufy can be built and run via Docker using the included `docker-compose.yml`.
-
-### Building
+The default Docker target runs the CPU-only API:
 
 ```bash
-docker compose build
+mkdir -p input output tmp
+GGUFY_UID="$(id -u)" GGUFY_GID="$(id -g)" docker compose up --build
+curl http://localhost:8000/health
 ```
 
-### Running
-
-Place input files in the `./input` directory and output files will be written to `./output`. Run ggufy with any arguments:
-
-```bash
-docker compose run --rm ggufy {args}
-```
-
-Where `{args}` are any ggufy command and options. For example:
+For the API endpoints and tensor-rule examples, see [docs/API.md](docs/API.md).
+The original CLI-only image remains available as a separate target:
 
 ```bash
-# Convert a model to Q4_K
-docker compose run --rm ggufy convert -d q4_k --output-dir /app/output /app/input/model.safetensors
-
-# View file header
-docker compose run --rm ggufy header /app/input/model.safetensors
+docker build --target cli-runtime -t ggufy-cli .
+docker run --rm \
+  -v "$PWD/input:/input:ro" \
+  -v "$PWD/output:/output" \
+  ggufy-cli convert -d q4_k --output-dir /output /input/model.safetensors
 ```
 
 ## Acknowledgements

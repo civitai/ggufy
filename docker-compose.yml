@@ -1,11 +1,28 @@
 services:
-  ggufy:
+  api:
     build:
       context: .
       dockerfile: Dockerfile
       target: runtime
-    image: ggufy:latest
+    image: ggufy-api:latest
+    user: "${GGUFY_UID:-1000}:${GGUFY_GID:-1000}"
+    environment:
+      GGUFY_MAX_CONCURRENT_JOBS: "1"
+      GGUFY_MAX_THREADS: "${GGUFY_MAX_THREADS:-8}"
+      HF_TOKEN: "${HF_TOKEN:-}"
+    ports:
+      - "8000:8000"
     volumes:
-      - ./input:/app/input:ro
-      - ./output:/app/output
-    working_dir: /app
+      - ./output:/data/output
+      - ./input:/data/input:ro
+      - ./tmp:/data/tmp
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s

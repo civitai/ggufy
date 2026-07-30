@@ -1,10 +1,17 @@
 .idea
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
 .zig-cache
 zig-out
 zig-pkg
 # test-models directory for putting testing models
 test-models
+e2e-data/
 # Python virtual environment for generating comparison data
 venv
 input/
 output/
+tmp/
