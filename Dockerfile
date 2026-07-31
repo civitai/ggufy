@@ -31,13 +31,48 @@ COPY --from=zig-download /opt/zig /opt/zig
 ENV PATH=/opt/zig:${PATH}
 
 WORKDIR /opt/ggufy
-COPY . /opt/ggufy
-RUN zig build --release=fast
+COPY build.zig build.zig.zon build_ggml.zig ./
+COPY src ./src
+COPY vendor ./vendor
+RUN zig build cli --release=fast
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim AS cli-runtime
 
 WORKDIR /app
 COPY --from=builder /opt/ggufy/zig-out/bin/ggufy /usr/local/bin/ggufy
 
 ENTRYPOINT ["ggufy"]
 CMD ["--help"]
+
+FROM ghcr.io/astral-sh/uv:0.9.18 AS uv
+
+FROM python:3.12-slim-bookworm AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    GGUFY_DATA_ROOT=/data \
+    GGUFY_BINARY=/usr/local/bin/ggufy \
+    GGUFY_MAX_CONCURRENT_JOBS=1
+
+COPY --from=uv /uv /uvx /usr/local/bin/
+COPY --from=builder /opt/ggufy/zig-out/bin/ggufy /usr/local/bin/ggufy
+
+WORKDIR /app
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+COPY api ./api
+RUN uv sync --frozen --no-dev
+
+RUN groupadd --system --gid 10001 ggufy \
+    && useradd --system --uid 10001 --gid ggufy --home-dir /app ggufy \
+    && mkdir -p /data/input /data/output /data/tmp \
+    && chown -R ggufy:ggufy /app /data
+
+USER 10001:10001
+
+EXPOSE 8000
+VOLUME ["/data"]
+
+CMD ["/app/.venv/bin/uvicorn", "ggufy_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
