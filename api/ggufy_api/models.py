@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
 NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -22,6 +22,21 @@ class OutputType(StrEnum):
     BF16 = "BF16"
     F16 = "F16"
     F32 = "F32"
+    Q8_0 = "Q8_0"
+    Q5_0 = "Q5_0"
+    Q5_1 = "Q5_1"
+    Q4_0 = "Q4_0"
+    Q4_1 = "Q4_1"
+    Q6_K = "Q6_K"
+    Q5_K = "Q5_K"
+    Q4_K = "Q4_K"
+    Q3_K = "Q3_K"
+    Q2_K = "Q2_K"
+
+
+class ModelFormat(StrEnum):
+    SAFETENSORS = "safetensors"
+    GGUF = "gguf"
 
 
 class RuleMatch(StrEnum):
@@ -52,7 +67,8 @@ class TensorSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: str | None = None
-    metadata: dict[str, str] = Field(default_factory=dict)
+    format: ModelFormat = ModelFormat.SAFETENSORS
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
     tensors: list[TensorDefinition]
 
     @model_validator(mode="after")
@@ -74,6 +90,7 @@ class TensorRule(BaseModel):
 class QuantizationPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    output_format: ModelFormat = ModelFormat.SAFETENSORS
     default_type: OutputType | Literal["PRESERVE"] | None = None
     reference_schema: TensorSchema | None = Field(
         default=None,
@@ -116,7 +133,11 @@ class HuggingFaceSchemaRequest(BaseModel):
     repo_id: Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^[^/\s]+/[^/\s]+$")]
     filename: Annotated[
         str,
-        StringConstraints(strip_whitespace=True, min_length=13, pattern=r"^[^\\]+\.safetensors$"),
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=6,
+            pattern=r"^[^\\]+\.(?:safetensors|gguf)$",
+        ),
     ]
     revision: NonEmpty = "main"
     read_markers: bool = True
@@ -130,6 +151,7 @@ class HuggingFaceSchemaRequest(BaseModel):
 
 class PlanResponse(BaseModel):
     source: str
+    format: ModelFormat
     tensors: list[TensorDefinition]
     type_counts: dict[str, int]
     matched_by_schema: int
@@ -139,6 +161,7 @@ class PlanResponse(BaseModel):
 
 class ConversionResponse(BaseModel):
     output_path: str
+    format: ModelFormat
     output_size: int
     tensor_count: int
     type_counts: dict[str, int]

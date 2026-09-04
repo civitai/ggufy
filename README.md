@@ -2,8 +2,9 @@
 A lightweight and efficient tool to convert tensor formats.
 
 > This fork also includes a CPU-only FastAPI service for controller and
-> orchestration integration. See [the API guide](docs/API.md) for exact tensor
-> rules, Hugging Face range-based schema extraction, Docker usage, and the
+> orchestration integration. It produces safetensors or GGUF output and can copy
+> either schema from a Hugging Face example using HTTP ranges. See the
+> [API guide](docs/API.md) for exact tensor rules, Docker usage, and the
 > `/v1/conversions` endpoint.
 
 ggufy:

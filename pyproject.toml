@@ -1,7 +1,7 @@
 [project]
 name = "ggufy-api"
-version = "0.1.0"
-description = "CPU-only HTTP API for GGUFy safetensors conversion"
+version = "0.2.0"
+description = "CPU-only HTTP API for GGUFy safetensors and GGUF conversion"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
