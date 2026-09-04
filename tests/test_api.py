@@ -101,19 +101,31 @@ async def test_paths_cannot_escape_roots(settings, tmp_path: Path) -> None:
     _write_fake_ggufy(settings.ggufy_binary)
     outside = tmp_path / "outside.safetensors"
     write_safetensors(outside, [("weight", "F32", [1], struct.pack("<f", 1))])
+    sibling = settings.input_root.parent / "input-escape" / "outside.safetensors"
+    write_safetensors(sibling, [("weight", "F32", [1], struct.pack("<f", 1))])
+    symlink = settings.input_root / "outside-link.safetensors"
+    symlink.symlink_to(outside)
     app = create_app(settings=settings, service=QuantizationService(settings))
 
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.post(
-                "/v1/plans/resolve",
-                json={"input_path": str(outside), "default_type": "PRESERVE"},
-            )
+            responses = [
+                await client.post(
+                    "/v1/plans/resolve",
+                    json={"input_path": path, "default_type": "PRESERVE"},
+                )
+                for path in (
+                    str(outside),
+                    "../../outside.safetensors",
+                    str(sibling),
+                    symlink.name,
+                )
+            ]
 
-    assert response.status_code == 400
-    assert "must be within" in response.json()["detail"]
+    assert all(response.status_code == 400 for response in responses)
+    assert all("must be within" in response.json()["detail"] for response in responses)
 
 
 async def test_output_escape_is_rejected_before_directories_are_created(

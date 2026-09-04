@@ -74,15 +74,25 @@ class QuantizationService:
         return resolved
 
     def _resolve_existing_path(self, raw_path: str) -> Path:
-        candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = self.settings.input_root / candidate
+        candidate = raw_path
         try:
-            resolved = candidate.resolve(strict=True)
-        except FileNotFoundError as exc:
+            input_root = os.path.realpath(self.settings.input_root, strict=True)
+            candidate = (
+                raw_path
+                if os.path.isabs(raw_path)
+                else os.path.join(input_root, raw_path)
+            )
+            resolved_value = os.path.realpath(candidate, strict=True)
+        except OSError as exc:
             raise PathPolicyError(f"input file does not exist: {candidate}") from exc
-        if not _inside(resolved, self.settings.input_root):
+
+        # The trailing separator prevents sibling-prefix matches such as
+        # /data/input-escape. realpath also resolves traversal and symlinks before
+        # the caller-controlled value reaches any filesystem operation.
+        input_prefix = os.path.join(input_root, "")
+        if not resolved_value.startswith(input_prefix):
             raise PathPolicyError(f"input path must be within {self.settings.input_root}")
+        resolved = Path(resolved_value)
         if not resolved.is_file():
             raise PathPolicyError("input path must be a file")
         return resolved
