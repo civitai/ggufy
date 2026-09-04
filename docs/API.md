@@ -2,7 +2,7 @@
 
 The API wraps the native GGUFy executable with path isolation, exact tensor
 planning, output validation, and one CPU conversion subprocess per request.
-It always produces safetensors.
+Safetensors inputs can produce either safetensors or GGUF output.
 
 ## Development
 
@@ -60,6 +60,12 @@ non-`.weight` tensors, token embeddings, and format-incompatible shapes remain
 at source precision. Explicit rules and copied schemas are authoritative and
 are therefore validated strictly rather than silently downgraded.
 
+`output_format` defaults to `safetensors`. For GGUF output, set it to `gguf`
+and use a `.gguf` output path. CPU GGUF targets are `Q8_0`, `Q5_0`, `Q5_1`,
+`Q4_0`, `Q4_1`, `Q6_K`, `Q5_K`, `Q4_K`, `Q3_K`, `Q2_K`, `MXFP4`, `BF16`,
+`F16`, and `F32`. The planner rejects IQ/TQ, GGUF NVFP4, Q8_K, and Q8_1
+destinations because this native build cannot produce them.
+
 ```bash
 curl -sS http://localhost:8000/v1/conversions \
   -H 'content-type: application/json' \
@@ -89,9 +95,11 @@ divisible by 256.
 
 ## Copy a Hugging Face schema
 
-This endpoint uses HTTP range requests. It fetches the safetensors header and,
-when present, the small ComfyUI `.comfy_quant` marker payloads. Model weights
-are not downloaded.
+This endpoint uses HTTP range requests. For safetensors it fetches the header
+and, when present, the small ComfyUI `.comfy_quant` marker payloads. For GGUF
+it fetches the typed metadata and tensor directory at the beginning of the
+file. Model weights are not downloaded in either case. The filename extension
+selects the parser.
 
 ```bash
 curl -sS http://localhost:8000/v1/schemas/huggingface \
@@ -125,6 +133,37 @@ curl -sS http://localhost:8000/v1/conversions \
 `schema_match: "suffix"` supports sources with an additional namespace prefix.
 Suffix matching still requires a unique match and exact shape equality.
 
+To reproduce a GGUF quantization layout, submit a GGUF example instead:
+
+```bash
+curl -sS http://localhost:8000/v1/schemas/huggingface \
+  -H 'content-type: application/json' \
+  -d '{
+    "repo_id": "city96/FLUX.1-dev-gguf",
+    "filename": "flux1-dev-Q4_K_S.gguf",
+    "revision": "3c60ac659f4b1f2ab3ca8bd4488272069b36a148"
+  }' > flux-q4-k-s-schema.json
+
+jq -n --slurpfile schema flux-q4-k-s-schema.json '{
+  input_path: "flux1-dev.safetensors",
+  output_path: "flux1-dev-Q4_K_S.gguf",
+  output_format: "gguf",
+  schema: $schema[0],
+  schema_match: "exact",
+  unmatched: "error"
+}' |
+curl -sS http://localhost:8000/v1/conversions \
+  -H 'content-type: application/json' \
+  --data-binary @-
+```
+
+The returned schema includes `format: "gguf"`, natural-order tensor shapes,
+GGML tensor types, and typed GGUF metadata. GGUFy preserves the example's
+architecture, quantization version, and file-type classification in the
+result. The SpineController caches this schema automatically when a job carries
+the pinned Hugging Face reference, while the conversion endpoint itself remains
+stateless.
+
 ## Resolve without converting
 
 Use `POST /v1/plans/resolve` with the same policy fields to inspect every
@@ -133,7 +172,7 @@ resolved tensor type before spending CPU time.
 Other endpoints:
 
 - `GET /health`
-- `POST /v1/schemas/local`
+- `POST /v1/schemas/local` (safetensors or GGUF)
 - `POST /v1/schemas/huggingface`
 - `POST /v1/plans/resolve`
 - `POST /v1/conversions`

@@ -1,4 +1,3 @@
-
 //! Convert.zig — SafeTensors → GGUF conversion logic.
 //! Extracted from main.zig so the convert command has its own home.
 
@@ -122,14 +121,11 @@ fn precisionRank(type_str: []const u8) u8 {
         .q1_0, .tq1_0, .iq1_s, .iq1_m => 1,
         .q2_k, .iq2_xxs, .iq2_xs, .iq2_s, .tq2_0 => 2,
         .q3_k, .iq3_xxs, .iq3_s => 3,
-        .q4_0, .q4_1, .q4_k, .iq4_nl, .iq4_xs,
-        .nvfp4, .mxfp4, .NVFP4, .MXFP4, .F4_E2M1 => 4,
+        .q4_0, .q4_1, .q4_k, .iq4_nl, .iq4_xs, .nvfp4, .mxfp4, .NVFP4, .MXFP4, .F4_E2M1 => 4,
         .q5_0, .q5_1, .q5_k => 5,
         .q6_k => 6,
-        .q8_0, .q8_1, .q8_k,
-        .F8_E4M3, .F8_E5M2, .SCALED_F8_E4M3, .MXFP8_E4M3 => 7,
-        .f16, .F16, .bf16, .BF16,
-        .i8, .I8, .I16, .i16, .U8, .U16 => 8,
+        .q8_0, .q8_1, .q8_k, .F8_E4M3, .F8_E5M2, .SCALED_F8_E4M3, .MXFP8_E4M3 => 7,
+        .f16, .F16, .bf16, .BF16, .i8, .I8, .I16, .i16, .U8, .U16 => 8,
         .f32, .F32, .i32, .I32, .U32 => 9,
         .f64, .F64, .i64, .I64, .U64 => 10,
         else => 255,
@@ -273,8 +269,8 @@ pub fn convert(
     if (!opts.allow_upscale and detectUpscaling(f.tensors.items, opts.datatype)) {
         std.log.err(
             "Source contains lossy-quantized tensors; converting to a higher-precision " ++
-            "format will NOT recover lost information — the extra bits are fill-in only. " ++
-            "Pass --allow-upscale (-U) to convert anyway.",
+                "format will NOT recover lost information — the extra bits are fill-in only. " ++
+                "Pass --allow-upscale (-U) to convert anyway.",
             .{},
         );
         return error.UpscalingNotAllowed;
@@ -457,7 +453,7 @@ fn filterAndStripTensors(
         // (VAE, text encoders, etc.) round-trip intact.
         for (f.tensors.items) |t| {
             if (!arch.shouldIgnore(t.name)) {
-                try model_tensors.append(arena_alloc,try t.dupe(arena_alloc));
+                try model_tensors.append(arena_alloc, try t.dupe(arena_alloc));
             }
         }
         return model_tensors;
@@ -479,14 +475,14 @@ fn filterAndStripTensors(
         if (has_model_prefix) {
             if (std.mem.startsWith(u8, t.name, "model.")) {
                 if (!arch.shouldIgnore(t.name)) {
-                    try model_tensors.append(arena_alloc,try t.dupe(arena_alloc));
+                    try model_tensors.append(arena_alloc, try t.dupe(arena_alloc));
                 }
             } else {
                 std.log.info("Filtering out tensor: {s}", .{t.name});
             }
         } else {
             if (!arch.shouldIgnore(t.name)) {
-                try model_tensors.append(arena_alloc,try t.dupe(arena_alloc));
+                try model_tensors.append(arena_alloc, try t.dupe(arena_alloc));
             }
         }
     }
@@ -539,7 +535,7 @@ fn applyTemplate(
 
         if (source_tensor) |src| {
             const new_t = try applyTemplateEntry(src, target_name, target_info, output_filetype, arena_alloc);
-            try filtered.append(arena_alloc,new_t);
+            try filtered.append(arena_alloc, new_t);
             std.log.info("Matched target tensor {s} to source tensor {s}, setting to type {s}", .{ target_name, src.name, new_t.type });
         } else {
             std.log.warn("Warning: Template tensor {s} not found in source file.", .{target_name});
@@ -832,7 +828,7 @@ fn assignTensorType(
     }
 
     if (use_sensitivity) {
-        try applySensitivityQuantization(t, num_elements, ttype,opts.quantization_aggressiveness, resolvedFamilies(opts), sensitivities.?);
+        try applySensitivityQuantization(t, num_elements, ttype, opts.quantization_aggressiveness, resolvedFamilies(opts), sensitivities.?);
     } else {
         std.log.debug("Will convert tensor {s} from type {s} to {s}", .{ t.name, t.type, @tagName(ttype) });
         t.type = @tagName(ttype);
@@ -1040,8 +1036,8 @@ fn mergeBaseConfig(
 fn ggufFileType(datatype: ?types.DataType) i64 {
     const dt = datatype orelse return 1; // default: MOSTLY_F16
     return switch (dt) {
-        .f32  => 0,
-        .f16  => 1,
+        .f32 => 0,
+        .f16 => 1,
         .q4_0 => 2,
         .q4_1 => 3,
         .q5_0 => 8,
@@ -1053,7 +1049,7 @@ fn ggufFileType(datatype: ?types.DataType) i64 {
         .q5_k => 17,
         .q6_k => 18,
         .bf16 => 37,
-        else  => 1,
+        else => 1,
     };
 }
 
@@ -1096,8 +1092,25 @@ fn buildGgufMetadata(
     // Standard metadata.
     const arch_name = opts.arch_override orelse arch.name;
     try metadata.put(arena_alloc, try arena_alloc.dupe(u8, "general.architecture"), .{ .string = arch_name });
-    try metadata.put(arena_alloc, try arena_alloc.dupe(u8, "general.quantization_version"), .{ .integer = 2 });
-    try metadata.put(arena_alloc, try arena_alloc.dupe(u8, "general.file_type"), .{ .integer = ggufFileType(opts.datatype) });
+    // An exact GGUF template describes a mixed quantization layout. Preserve its
+    // file-level classification (for example Q4_K_S vs Q4_K_M) instead of reducing
+    // that information to the optional single --datatype value.
+    const template_quantization_version = if (template_metadata) |meta|
+        if (meta.get("general.quantization_version")) |value|
+            if (value == .integer) value.integer else 2
+        else
+            2
+    else
+        2;
+    const template_file_type = if (template_metadata) |meta|
+        if (meta.get("general.file_type")) |value|
+            if (value == .integer) value.integer else ggufFileType(opts.datatype)
+        else
+            ggufFileType(opts.datatype)
+    else
+        ggufFileType(opts.datatype);
+    try metadata.put(arena_alloc, try arena_alloc.dupe(u8, "general.quantization_version"), .{ .integer = template_quantization_version });
+    try metadata.put(arena_alloc, try arena_alloc.dupe(u8, "general.file_type"), .{ .integer = template_file_type });
 
     // Template metadata takes priority over source-file metadata.
     if (template_metadata) |meta| {
@@ -1294,7 +1307,7 @@ fn filterTensorsForExport(
         }
         var duped = try t.dupe(arena_alloc);
         duped.name = try arena_alloc.dupe(u8, imagearch.stripPrefix(duped.name));
-        try result.append(arena_alloc,duped);
+        try result.append(arena_alloc, duped);
     }
     return result;
 }
@@ -1432,7 +1445,10 @@ pub fn templateTypeSuffix(
                 const display = safetensorDisplayType(type_val.string);
                 var already = false;
                 for (seen[0..seen_count]) |s| {
-                    if (std.mem.eql(u8, s, display)) { already = true; break; }
+                    if (std.mem.eql(u8, s, display)) {
+                        already = true;
+                        break;
+                    }
                 }
                 if (!already and seen_count < seen.len) {
                     seen[seen_count] = display;

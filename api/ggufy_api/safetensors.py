@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .models import TensorDefinition, TensorSchema
+from .models import ModelFormat, TensorDefinition, TensorSchema
 
 
 class SafetensorsError(ValueError):
@@ -141,6 +141,8 @@ async def _read_range(
     start: int,
     end: int,
     headers: dict[str, str],
+    *,
+    require_exact: bool = True,
 ) -> bytes:
     expected = end - start + 1
     request_headers = {**headers, "Range": f"bytes={start}-{end}"}
@@ -159,7 +161,7 @@ async def _read_range(
                 result.extend(chunk)
                 if len(result) >= expected:
                     break
-            if len(result) < expected:
+            if require_exact and len(result) < expected:
                 raise SafetensorsError(
                     f"range request returned {len(result)} bytes; expected {expected}"
                 )
@@ -185,7 +187,7 @@ async def read_huggingface_header(
     timeout_seconds: float,
 ) -> tuple[SafetensorsHeader, str, httpx.AsyncClient, dict[str, str]]:
     url = huggingface_resolve_url(repo_id, filename, revision)
-    headers = {"User-Agent": "ggufy-api/0.1"}
+    headers = {"User-Agent": "ggufy-api/0.2"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     client = httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True)
@@ -366,4 +368,9 @@ def logical_schema(
         logical.append(TensorDefinition(name=name, shape=tensor.shape, dtype=tensor.dtype))
 
     logical.sort(key=lambda item: item.name)
-    return TensorSchema(source=source, metadata=header.metadata, tensors=logical)
+    return TensorSchema(
+        source=source,
+        format=ModelFormat.SAFETENSORS,
+        metadata=header.metadata,
+        tensors=logical,
+    )

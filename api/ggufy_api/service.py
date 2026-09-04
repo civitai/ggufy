@@ -10,11 +10,13 @@ import uuid
 from pathlib import Path
 
 from .config import Settings
+from .gguf import GgufError, read_huggingface_gguf_schema, read_local_gguf_schema
 from .models import (
     ConversionRequest,
     ConversionResponse,
     HuggingFaceSchemaRequest,
     LocalSchemaRequest,
+    ModelFormat,
     PlanRequest,
     PlanResponse,
     TensorSchema,
@@ -60,17 +62,39 @@ class QuantizationService:
         return resolved or configured
 
     def resolve_input_path(self, raw_path: str) -> Path:
-        candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = self.settings.input_root / candidate
+        resolved = self._resolve_existing_path(raw_path)
+        if resolved.suffix.lower() != ".safetensors":
+            raise PathPolicyError("conversion input must be a .safetensors file")
+        return resolved
+
+    def resolve_schema_path(self, raw_path: str) -> Path:
+        resolved = self._resolve_existing_path(raw_path)
+        if resolved.suffix.lower() not in (".safetensors", ".gguf"):
+            raise PathPolicyError("schema input must be a .safetensors or .gguf file")
+        return resolved
+
+    def _resolve_existing_path(self, raw_path: str) -> Path:
+        candidate = raw_path
         try:
-            resolved = candidate.resolve(strict=True)
-        except FileNotFoundError as exc:
+            input_root = os.path.realpath(self.settings.input_root, strict=True)
+            candidate = (
+                raw_path
+                if os.path.isabs(raw_path)
+                else os.path.join(input_root, raw_path)
+            )
+            resolved_value = os.path.realpath(candidate, strict=True)
+        except OSError as exc:
             raise PathPolicyError(f"input file does not exist: {candidate}") from exc
-        if not _inside(resolved, self.settings.input_root):
+
+        # The trailing separator prevents sibling-prefix matches such as
+        # /data/input-escape. realpath also resolves traversal and symlinks before
+        # the caller-controlled value reaches any filesystem operation.
+        input_prefix = os.path.join(input_root, "")
+        if not resolved_value.startswith(input_prefix):
             raise PathPolicyError(f"input path must be within {self.settings.input_root}")
-        if not resolved.is_file() or resolved.suffix.lower() != ".safetensors":
-            raise PathPolicyError("input must be a .safetensors file")
+        resolved = Path(resolved_value)
+        if not resolved.is_file():
+            raise PathPolicyError("input path must be a file")
         return resolved
 
     def resolve_output_path(
@@ -79,21 +103,23 @@ class QuantizationService:
         *,
         input_path: Path,
         plan: ResolvedPlan,
+        output_format: ModelFormat,
         overwrite: bool,
     ) -> Path:
+        extension = f".{output_format.value}"
         if raw_path is None:
             if len(plan.response.type_counts) == 1:
                 label = next(iter(plan.response.type_counts)).lower()
             else:
                 label = "mixed"
-            candidate = self.settings.output_root / f"{input_path.stem}-{label}.safetensors"
+            candidate = self.settings.output_root / f"{input_path.stem}-{label}{extension}"
         else:
             candidate = Path(raw_path)
             if not candidate.is_absolute():
                 candidate = self.settings.output_root / candidate
 
-        if candidate.suffix.lower() != ".safetensors":
-            raise PathPolicyError("output path must end with .safetensors")
+        if candidate.suffix.lower() != extension:
+            raise PathPolicyError(f"{output_format.value} output path must end with {extension}")
         parent = candidate.parent.resolve(strict=False)
         if not _inside(parent, self.settings.output_root):
             raise PathPolicyError(f"output path must be within {self.settings.output_root}")
@@ -107,7 +133,13 @@ class QuantizationService:
         return resolved
 
     async def local_schema(self, request: LocalSchemaRequest) -> TensorSchema:
-        path = self.resolve_input_path(request.path)
+        path = self.resolve_schema_path(request.path)
+        if path.suffix.lower() == ".gguf":
+            return await asyncio.to_thread(
+                read_local_gguf_schema,
+                path,
+                self.settings.max_header_bytes,
+            )
         header = await asyncio.to_thread(read_local_header, path, self.settings.max_header_bytes)
         markers = (
             await read_local_markers(
@@ -122,6 +154,15 @@ class QuantizationService:
         return logical_schema(header, source=str(path), marker_values=markers)
 
     async def huggingface_schema(self, request: HuggingFaceSchemaRequest) -> TensorSchema:
+        if request.filename.lower().endswith(".gguf"):
+            return await read_huggingface_gguf_schema(
+                repo_id=request.repo_id,
+                filename=request.filename,
+                revision=request.revision,
+                token=os.getenv("HF_TOKEN"),
+                max_header_bytes=self.settings.max_header_bytes,
+                timeout_seconds=self.settings.remote_timeout_seconds,
+            )
         header, url, client, headers = await read_huggingface_header(
             repo_id=request.repo_id,
             filename=request.filename,
@@ -163,6 +204,7 @@ class QuantizationService:
             request.output_path,
             input_path=input_path,
             plan=plan,
+            output_format=request.output_format,
             overwrite=request.overwrite,
         )
         threads = min(request.threads or self.settings.max_threads, self.settings.max_threads)
@@ -180,13 +222,13 @@ class QuantizationService:
             template_path = Path(template_file.name)
 
         temporary_name = f".{output_path.stem}.{uuid.uuid4().hex}.partial"
-        temporary_output = output_path.parent / f"{temporary_name}.safetensors"
+        temporary_output = output_path.parent / f"{temporary_name}.{request.output_format.value}"
         command = [
             self.binary_path(),
             "convert",
             str(input_path),
             "--filetype",
-            "safetensors",
+            request.output_format.value,
             "--template",
             str(template_path),
             "--output-dir",
@@ -200,6 +242,10 @@ class QuantizationService:
             # choose types, and should not block new diffusion architectures.
             "--allow-unknown-arch",
         ]
+        if request.output_format == ModelFormat.GGUF and request.reference_schema is not None:
+            architecture = request.reference_schema.metadata.get("general.architecture")
+            if isinstance(architecture, str) and architecture:
+                command.extend(("--arch", architecture))
         if request.allow_upscale:
             command.append("--allow-upscale")
 
@@ -218,7 +264,7 @@ class QuantizationService:
                     f"{stderr_tail or stdout_tail or 'no log output'}"
                 )
 
-            await self._validate_output(temporary_output, plan)
+            await self._validate_output(temporary_output, plan, request.output_format)
             if output_path.exists() and not request.overwrite:
                 raise OutputConflictError(f"output already exists: {output_path}")
             if request.overwrite:
@@ -232,6 +278,7 @@ class QuantizationService:
 
             return ConversionResponse(
                 output_path=str(output_path),
+                format=request.output_format,
                 output_size=output_path.stat().st_size,
                 tensor_count=len(plan.response.tensors),
                 type_counts=plan.response.type_counts,
@@ -278,20 +325,35 @@ class QuantizationService:
                 del tail[: len(tail) - self.settings.log_tail_bytes]
         return tail.decode("utf-8", errors="replace")
 
-    async def _validate_output(self, path: Path, plan: ResolvedPlan) -> None:
-        try:
-            header = await asyncio.to_thread(
-                read_local_header, path, self.settings.max_header_bytes
-            )
-            markers = await read_local_markers(
-                path,
-                header,
-                max_marker_bytes=self.settings.max_marker_bytes,
-                max_marker_requests=self.settings.max_marker_requests,
-            )
-            actual = logical_schema(header, source=str(path), marker_values=markers)
-        except SafetensorsError as exc:
-            raise ConversionError(f"GGUFy output is not valid safetensors: {exc}") from exc
+    async def _validate_output(
+        self,
+        path: Path,
+        plan: ResolvedPlan,
+        output_format: ModelFormat,
+    ) -> None:
+        if output_format == ModelFormat.GGUF:
+            try:
+                actual = await asyncio.to_thread(
+                    read_local_gguf_schema,
+                    path,
+                    self.settings.max_header_bytes,
+                )
+            except GgufError as exc:
+                raise ConversionError(f"GGUFy output is not valid GGUF: {exc}") from exc
+        else:
+            try:
+                header = await asyncio.to_thread(
+                    read_local_header, path, self.settings.max_header_bytes
+                )
+                markers = await read_local_markers(
+                    path,
+                    header,
+                    max_marker_bytes=self.settings.max_marker_bytes,
+                    max_marker_requests=self.settings.max_marker_requests,
+                )
+                actual = logical_schema(header, source=str(path), marker_values=markers)
+            except SafetensorsError as exc:
+                raise ConversionError(f"GGUFy output is not valid safetensors: {exc}") from exc
 
         expected_by_name = {tensor.name: tensor for tensor in plan.response.tensors}
         actual_by_name = {tensor.name: tensor for tensor in actual.tensors}

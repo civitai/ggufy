@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from ggufy_api.config import Settings
+from ggufy_api.gguf import GGML_TYPES
 
 
 def write_safetensors(
@@ -32,6 +33,56 @@ def write_safetensors(
     encoded += b" " * padding
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(struct.pack("<Q", len(encoded)) + encoded + payload)
+
+
+def _gguf_string(value: str) -> bytes:
+    encoded = value.encode("utf-8")
+    return struct.pack("<Q", len(encoded)) + encoded
+
+
+def _gguf_value(value: object) -> tuple[int, bytes]:
+    if type(value) is bool:
+        return 7, struct.pack("<B", value)
+    if type(value) is int:
+        return 4, struct.pack("<I", value)
+    if type(value) is float:
+        return 6, struct.pack("<f", value)
+    if type(value) is str:
+        return 8, _gguf_string(value)
+    if type(value) is list and value:
+        element_type, _ = _gguf_value(value[0])
+        encoded = bytearray(struct.pack("<IQ", element_type, len(value)))
+        for item in value:
+            item_type, payload = _gguf_value(item)
+            assert item_type == element_type
+            encoded.extend(payload)
+        return 9, bytes(encoded)
+    raise ValueError(f"unsupported test GGUF metadata value: {value!r}")
+
+
+def write_gguf(
+    path: Path,
+    tensors: list[tuple[str, str, list[int]]],
+    *,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    metadata = metadata or {}
+    encoded = bytearray(b"GGUF")
+    encoded.extend(struct.pack("<IQQ", 3, len(tensors), len(metadata)))
+    for key, value in metadata.items():
+        value_type, payload = _gguf_value(value)
+        encoded.extend(_gguf_string(key))
+        encoded.extend(struct.pack("<I", value_type))
+        encoded.extend(payload)
+    for name, dtype, shape in tensors:
+        encoded.extend(_gguf_string(name))
+        encoded.extend(struct.pack("<I", len(shape)))
+        for dimension in reversed(shape):
+            encoded.extend(struct.pack("<Q", dimension))
+        encoded.extend(struct.pack("<I", GGML_TYPES.index(dtype)))
+        encoded.extend(struct.pack("<Q", 0))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(encoded)
 
 
 @pytest.fixture

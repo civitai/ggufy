@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from . import __version__
 from .config import Settings
+from .gguf import GgufError
 from .models import (
     ConversionRequest,
     ConversionResponse,
@@ -43,7 +44,8 @@ def create_app(
     app = FastAPI(
         title="GGUFy Quantization API",
         description=(
-            "CPU-only safetensors conversion service using GGUFy. "
+            "CPU-only safetensors-to-safetensors or safetensors-to-GGUF conversion "
+            "service using GGUFy. "
             "Tensor policies are resolved to an immutable, exact-name template."
         ),
         version=__version__,
@@ -54,6 +56,7 @@ def create_app(
     @app.exception_handler(PathPolicyError)
     @app.exception_handler(PlanError)
     @app.exception_handler(SafetensorsError)
+    @app.exception_handler(GgufError)
     async def bad_request(_: Request, exc: Exception) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
